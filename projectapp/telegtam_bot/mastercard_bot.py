@@ -1,420 +1,163 @@
-# # mastercard_bot_telegram.py
-# import re
-# import pdfplumber
-# from openpyxl import Workbook
-# from aiogram import Bot, Dispatcher, types, F
-# from aiogram.filters import Command
-# from aiogram.types import FSInputFile
-# import asyncio
-# import os
-#
-# TOKEN = "7970127157:AAE98YOZf3P2BQ2ScSiqu0TdbYp9MP-Mch0"
-# bot = Bot(token=TOKEN)
-# dp = Dispatcher()
-#
-#
-# # ======================= Helper funksiyalar =======================
-#
-# def _to_float(s):
-#     if not s:
-#         return 0.0
-#     s = s.strip().replace(",", "")
-#     if s.startswith("(") and s.endswith(")"):
-#         s = "-" + s[1:-1]
-#     try:
-#         return float(s)
-#     except:
-#         return 0.0
-#
-#
-# def extract_text_from_pdf(pdf_path):
-#     text = ""
-#     with pdfplumber.open(pdf_path) as pdf:
-#         for page in pdf.pages:
-#             t = page.extract_text()
-#             if t:
-#                 text += t + "\n"
-#     return text
-#
-#
-# def _extract_section_totals(block, header_pattern):
-#     m = re.search(header_pattern, block, re.I | re.S)
-#     if not m:
-#         return 0.0, 0.0, 0.0
-#
-#     sub = block[m.end():]
-#
-#     total_m = re.search(r"\bTotal:\s*([-\d,().]+)", sub)
-#     debit_m = re.search(r"Total\s+Debit\s+Fees[:\s]*([-\d,().]+)", sub)
-#     credit_m = re.search(r"Total\s+Credit\s+Fees[:\s]*([-\d,().]+)", sub)
-#
-#     total = _to_float(total_m.group(1)) if total_m else 0.0
-#     debit = _to_float(debit_m.group(1)) if debit_m else 0.0
-#     credit = _to_float(credit_m.group(1)) if credit_m else 0.0
-#
-#     return total, debit, credit
-#
-#
-# def parse_mastercard_report(pdf_text):
-#     results = {}
-#
-#     blocks = re.split(r"Business Date:", pdf_text)
-#     for block in blocks[1:]:
-#         date_m = re.search(r"(\d{4}\.\d{2}\.\d{2})", block)
-#         cur_m = re.search(r"Reconcilation Currency:\s*([A-Za-z]+)", block, re.I)
-#
-#         if not date_m or not cur_m:
-#             continue
-#
-#         date = date_m.group(1)
-#         currency = cur_m.group(1).upper()
-#
-#         key = (date, currency)
-#
-#         if key not in results:
-#             results[key] = {
-#                 "currency": currency,
-#                 "acquiring": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-#                 "issuing": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-#                 "misc": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-#                 "grand_total": 0.0,
-#                 "grand_debit": 0.0,
-#                 "grand_credit": 0.0
-#             }
-#
-#         acq_tot, acq_deb, acq_cred = _extract_section_totals(
-#             block, r"Transaction Function:\s*First Presentment Original/Acquiring"
-#         )
-#         iss_tot, iss_deb, iss_cred = _extract_section_totals(
-#             block, r"Transaction Function:\s*First Presentment Original/Issuing"
-#         )
-#         misc_tot, misc_deb, misc_cred = _extract_section_totals(
-#             block, r"Transaction Function:\s*Fee Collection Original/Miscellaneous"
-#         )
-#
-#         grand_m = re.search(r"Grand Total:\s*([-\d,().]+)", block)
-#         grand_deb_m = re.search(r"Grand Total Debit Fees\s*([-\d,().]+)", block)
-#         grand_cred_m = re.search(r"Grand Total Credit Fees\s*([-\d,().]+)", block)
-#
-#         results[key]["acquiring"]["total"] += acq_tot
-#         results[key]["acquiring"]["debit"] += acq_deb
-#         results[key]["acquiring"]["credit"] += acq_cred
-#
-#         results[key]["issuing"]["total"] += iss_tot
-#         results[key]["issuing"]["debit"] += iss_deb
-#         results[key]["issuing"]["credit"] += iss_cred
-#
-#         results[key]["misc"]["total"] += misc_tot
-#         results[key]["misc"]["debit"] += misc_deb
-#         results[key]["misc"]["credit"] += misc_cred
-#
-#         if grand_m:
-#             results[key]["grand_total"] = _to_float(grand_m.group(1))
-#         if grand_deb_m:
-#             results[key]["grand_debit"] = _to_float(grand_deb_m.group(1))
-#         if grand_cred_m:
-#             results[key]["grand_credit"] = _to_float(grand_cred_m.group(1))
-#
-#     return results
-#
-#
-# def create_excel(data, output_file):
-#     wb = Workbook()
-#     ws = wb.active
-#     ws.title = "MasterCard Report"
-#
-#     ws.append(["Date", "Acquiring", "Issuing", "Miscellaneous", "Grand Total", "Type", "Currency"])
-#     ws.append([])
-#
-#     for (date, currency) in sorted(data.keys()):
-#         row = data[(date, currency)]
-#
-#         ws.append([date,
-#                    row["acquiring"]["total"],
-#                    row["issuing"]["total"],
-#                    row["misc"]["total"],
-#                    row["grand_total"],
-#                    "Total",
-#                    currency])
-#
-#         ws.append(["",
-#                    row["acquiring"]["debit"],
-#                    row["issuing"]["debit"],
-#                    row["misc"]["debit"],
-#                    row["grand_debit"],
-#                    "Total Debit Fees",
-#                    ""])
-#
-#         ws.append(["",
-#                    row["acquiring"]["credit"],
-#                    row["issuing"]["credit"],
-#                    row["misc"]["credit"],
-#                    row["grand_credit"],
-#                    "Total Credit Fees",
-#                    ""])
-#         ws.append([])
-#
-#     for r in ws.iter_rows(min_row=3):
-#         for c in r:
-#             if isinstance(c.value, (int, float)):
-#                 c.number_format = "0.00"
-#
-#     wb.save(output_file)
-#
-#
-# # ======================= Telegram handlerlar =======================
-#
-# @dp.message(Command("start"))
-# async def start_cmd(message: types.Message):
-#     await message.answer("👋 Salom! Menga faqat *MasterCard PDF* yuboring, men uni Excelga aylantirib qaytaraman.")
-#
-#
-# # 🚫 Rasmlar
-# @dp.message(F.photo)
-# async def handle_photo(message: types.Message):
-#     await message.answer("❗ Rasm qabul qilinmaydi. Faqat MasterCard PDF yuboring.")
-#
-# # 🚫 Videolar
-# @dp.message(F.video)
-# async def handle_video(message: types.Message):
-#     await message.answer("❗ Video qabul qilinmaydi. Faqat MasterCard PDF yuboring.")
-#
-# # 🚫 Ovozli xabarlar
-# @dp.message(F.voice)
-# async def handle_voice(message: types.Message):
-#     await message.answer("❗ Ovozli xabar qabul qilinmaydi. Faqat MasterCard PDF yuboring.")
-#
-#
-# # 📥 Faqat PDF fayllarni qabul qilish
-# @dp.message(F.document)
-# async def handle_doc(message: types.Message):
-#     if message.document.mime_type != "application/pdf":
-#         await message.answer("❗ Bu fayl PDF emas. Faqat MasterCard PDF yuboring.")
-#         return
-#
-#     os.makedirs("downloads", exist_ok=True)
-#     filename = message.document.file_name or f"{message.document.file_unique_id}.pdf"
-#     pdf_path = os.path.join("downloads", f"{message.document.file_unique_id}_{filename}")
-#
-#     try:
-#         # 📥 Faylni olish
-#         file = await bot.get_file(message.document.file_id)
-#         await bot.download_file(file.file_path, pdf_path)
-#
-#         await message.answer("✅ PDF qabul qilindi. O‘qilmoqda...")
-#
-#         # 📖 PDF dan text olish
-#         text = extract_text_from_pdf(pdf_path)
-#
-#         # 🔑 MasterCard hisobotligini tekshirish
-#         if "MasterCard Financial Position Details by Transaction Types/ISS And ACQ" not in text:
-#             await message.answer("❗ Bu PDF MasterCard hisobotiga o‘xshamaydi.")
-#             return
-#
-#         # 📊 Parse qilish
-#         parsed = parse_mastercard_report(text)
-#
-#         if not parsed:
-#             await message.answer("❗ Kerakli ma’lumotlar topilmadi. To‘g‘ri MasterCard hisobotini yuboring.")
-#             return
-#
-#         # 📊 Excel yaratish
-#         out_xlsx = os.path.join("downloads", f"{message.document.file_unique_id}.xlsx")
-#         create_excel(parsed, out_xlsx)
-#
-#         # 📤 Excelni yuborish
-#         await message.reply_document(FSInputFile(out_xlsx))
-#
-#     except Exception as e:
-#         await message.answer(f"❗ Xatolik: {e}")
-#
-#     finally:
-#         if os.path.exists(pdf_path):
-#             os.remove(pdf_path)
-#         if 'out_xlsx' in locals() and os.path.exists(out_xlsx):
-#             os.remove(out_xlsx)
-#
-#
-# async def main():
-#     await dp.start_polling(bot)
-#
-#
-# if __name__ == "__main__":
-#     asyncio.run(main())
-
-
-# tg_mastercard_parser_bot.py
+# mastercard_bot_telegram.py
 import re
-import os
-import asyncio
-import logging
-import tempfile
-import uuid
 import pdfplumber
 from openpyxl import Workbook
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
+import asyncio
+import os
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Token
-TOKEN = os.getenv("TG_BOT_TOKEN") or "7970127157:AAE98YOZf3P2BQ2ScSiqu0TdbYp9MP-Mch0"
-
+TOKEN = "7970127157:AAE98YOZf3P2BQ2ScSiqu0TdbYp9MP-Mch0"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 
 # ======================= Helper funksiyalar =======================
 
-def parse_number(s: str) -> float:
-    if s is None:
+def _to_float(s):
+    if not s:
         return 0.0
-    s = str(s).strip()
-    if not s or s.lower() in ("n/a", "na"):
-        return 0.0
+    s = s.strip().replace(",", "")
     if s.startswith("(") and s.endswith(")"):
         s = "-" + s[1:-1]
-    s = s.replace(",", "").replace(" ", "")
     try:
         return float(s)
-    except Exception:
-        logger.debug("parse_number failed for %r", s)
+    except:
         return 0.0
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
+def extract_text_from_pdf(pdf_path):
     text = ""
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            ptext = page.extract_text()
-            if ptext:
-                text += ptext + "\n"
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
     return text
 
 
-def parse_mastercard_report(pdf_text: str) -> dict:
+def _extract_section_totals(block, header_pattern):
+    m = re.search(header_pattern, block, re.I | re.S)
+    if not m:
+        return 0.0, 0.0, 0.0
+
+    sub = block[m.end():]
+
+    total_m = re.search(r"\bTotal:\s*([-\d,().]+)", sub)
+    debit_m = re.search(r"Total\s+Debit\s+Fees[:\s]*([-\d,().]+)", sub)
+    credit_m = re.search(r"Total\s+Credit\s+Fees[:\s]*([-\d,().]+)", sub)
+
+    total = _to_float(total_m.group(1)) if total_m else 0.0
+    debit = _to_float(debit_m.group(1)) if debit_m else 0.0
+    credit = _to_float(credit_m.group(1)) if credit_m else 0.0
+
+    return total, debit, credit
+
+
+def parse_mastercard_report(pdf_text):
     results = {}
-    num = r"-?[\d,]+(?:\.\d+)?"
-    blocks = re.split(r"Business Date:", pdf_text, flags=re.I)
 
-    total_re = re.compile(r"Total:\s*(" + num + r")", re.I)
-    total_debit_re = re.compile(r"Total Debit Fees\s*(" + num + r")", re.I)
-    total_credit_re = re.compile(r"Total Credit Fees\s*(" + num + r")", re.I)
-    grand_total_re = re.compile(r"Grand Total:\s*(" + num + r")", re.I)
-    grand_debit_re = re.compile(r"Grand Total Debit Fees\s*(" + num + r")", re.I)
-    grand_credit_re = re.compile(r"Grand Total Credit Fees\s*(" + num + r")", re.I)
-    currency_re = re.compile(r"Reconcil\w*\s+Currency:\s*([A-Za-z]{2,4})", re.I)
-
-    acq_name = re.compile(r"Transaction Function:\s*First Presentment Original/Acquiring", re.I)
-    iss_name = re.compile(r"Transaction Function:\s*First Presentment Original/Issuing", re.I)
-    misc_name = re.compile(r"Transaction Function:\s*Fee Collection Original/Miscellaneous", re.I)
-
+    blocks = re.split(r"Business Date:", pdf_text)
     for block in blocks[1:]:
-        date_match = re.search(r"(\d{4}[.\-]\d{2}[.\-]\d{2})", block)
-        if not date_match:
+        date_m = re.search(r"(\d{4}\.\d{2}\.\d{2})", block)
+        cur_m = re.search(r"Reconcilation Currency:\s*([A-Za-z]+)", block, re.I)
+
+        if not date_m or not cur_m:
             continue
-        date = date_match.group(1)
 
-        cur_match = currency_re.search(block)
-        currency = cur_match.group(1).upper() if cur_match else ""
+        date = date_m.group(1)
+        currency = cur_m.group(1).upper()
 
-        record = {
-            "currency": currency,
-            "acquiring": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-            "issuing": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-            "misc": {"total": 0.0, "debit": 0.0, "credit": 0.0},
-            "grand_total": 0.0,
-            "grand_debit": 0.0,
-            "grand_credit": 0.0,
-        }
+        key = (date, currency)
 
-        # Acquiring
-        if acq_name.search(block):
-            acq_start = acq_name.search(block).start()
-            acq_text = block[acq_start:]
-            t = total_re.search(acq_text)
-            td = total_debit_re.search(acq_text)
-            tc = total_credit_re.search(acq_text)
-            if t: record["acquiring"]["total"] = parse_number(t.group(1))
-            if td: record["acquiring"]["debit"] = parse_number(td.group(1))
-            if tc: record["acquiring"]["credit"] = parse_number(tc.group(1))
+        if key not in results:
+            results[key] = {
+                "currency": currency,
+                "acquiring": {"total": 0.0, "debit": 0.0, "credit": 0.0},
+                "issuing": {"total": 0.0, "debit": 0.0, "credit": 0.0},
+                "misc": {"total": 0.0, "debit": 0.0, "credit": 0.0},
+                "grand_total": 0.0,
+                "grand_debit": 0.0,
+                "grand_credit": 0.0
+            }
 
-        # Issuing
-        if iss_name.search(block):
-            iss_start = iss_name.search(block).start()
-            iss_text = block[iss_start:]
-            t = total_re.search(iss_text)
-            td = total_debit_re.search(iss_text)
-            tc = total_credit_re.search(iss_text)
-            if t: record["issuing"]["total"] = parse_number(t.group(1))
-            if td: record["issuing"]["debit"] = parse_number(td.group(1))
-            if tc: record["issuing"]["credit"] = parse_number(tc.group(1))
+        acq_tot, acq_deb, acq_cred = _extract_section_totals(
+            block, r"Transaction Function:\s*First Presentment Original/Acquiring"
+        )
+        iss_tot, iss_deb, iss_cred = _extract_section_totals(
+            block, r"Transaction Function:\s*First Presentment Original/Issuing"
+        )
+        misc_tot, misc_deb, misc_cred = _extract_section_totals(
+            block, r"Transaction Function:\s*Fee Collection Original/Miscellaneous"
+        )
 
-        # Misc
-        if misc_name.search(block):
-            misc_start = misc_name.search(block).start()
-            misc_text = block[misc_start:]
-            t = total_re.search(misc_text)
-            td = total_debit_re.search(misc_text)
-            tc = total_credit_re.search(misc_text)
-            if t: record["misc"]["total"] = parse_number(t.group(1))
-            if td: record["misc"]["debit"] = parse_number(td.group(1))
-            if tc: record["misc"]["credit"] = parse_number(tc.group(1))
+        grand_m = re.search(r"Grand Total:\s*([-\d,().]+)", block)
+        grand_deb_m = re.search(r"Grand Total Debit Fees\s*([-\d,().]+)", block)
+        grand_cred_m = re.search(r"Grand Total Credit Fees\s*([-\d,().]+)", block)
 
-        # Grand totals
-        mg = grand_total_re.search(block)
-        if mg: record["grand_total"] = parse_number(mg.group(1))
-        mgd = grand_debit_re.search(block)
-        if mgd: record["grand_debit"] = parse_number(mgd.group(1))
-        mgc = grand_credit_re.search(block)
-        if mgc: record["grand_credit"] = parse_number(mgc.group(1))
+        results[key]["acquiring"]["total"] += acq_tot
+        results[key]["acquiring"]["debit"] += acq_deb
+        results[key]["acquiring"]["credit"] += acq_cred
 
-        results.setdefault(date, []).append(record)
+        results[key]["issuing"]["total"] += iss_tot
+        results[key]["issuing"]["debit"] += iss_deb
+        results[key]["issuing"]["credit"] += iss_cred
+
+        results[key]["misc"]["total"] += misc_tot
+        results[key]["misc"]["debit"] += misc_deb
+        results[key]["misc"]["credit"] += misc_cred
+
+        if grand_m:
+            results[key]["grand_total"] = _to_float(grand_m.group(1))
+        if grand_deb_m:
+            results[key]["grand_debit"] = _to_float(grand_deb_m.group(1))
+        if grand_cred_m:
+            results[key]["grand_credit"] = _to_float(grand_cred_m.group(1))
 
     return results
 
 
-def create_excel(data: dict, output_file: str):
+def create_excel(data, output_file):
     wb = Workbook()
     ws = wb.active
     ws.title = "MasterCard Report"
+
     ws.append(["Date", "Acquiring", "Issuing", "Miscellaneous", "Grand Total", "Type", "Currency"])
     ws.append([])
 
-    for date in sorted(data.keys()):
-        for record in data[date]:
-            currency = record.get("currency", "")
+    for (date, currency) in sorted(data.keys()):
+        row = data[(date, currency)]
 
-            ws.append([
-                date,
-                record["acquiring"]["total"],
-                record["issuing"]["total"],
-                record["misc"]["total"],
-                record["grand_total"],
-                "Total",
-                currency
-            ])
-            ws.append([
-                "",
-                record["acquiring"]["debit"],
-                record["issuing"]["debit"],
-                record["misc"]["debit"],
-                record["grand_debit"],
-                "Total Debit Fees",
-                ""
-            ])
-            ws.append([
-                "",
-                record["acquiring"]["credit"],
-                record["issuing"]["credit"],
-                record["misc"]["credit"],
-                record["grand_credit"],
-                "Total Credit Fees",
-                ""
-            ])
-            ws.append([])
+        ws.append([date,
+                   row["acquiring"]["total"],
+                   row["issuing"]["total"],
+                   row["misc"]["total"],
+                   row["grand_total"],
+                   "Total",
+                   currency])
+
+        ws.append(["",
+                   row["acquiring"]["debit"],
+                   row["issuing"]["debit"],
+                   row["misc"]["debit"],
+                   row["grand_debit"],
+                   "Total Debit Fees",
+                   ""])
+
+        ws.append(["",
+                   row["acquiring"]["credit"],
+                   row["issuing"]["credit"],
+                   row["misc"]["credit"],
+                   row["grand_credit"],
+                   "Total Credit Fees",
+                   ""])
+        ws.append([])
+
+    for r in ws.iter_rows(min_row=3):
+        for c in r:
+            if isinstance(c.value, (int, float)):
+                c.number_format = "0.00"
 
     wb.save(output_file)
 
@@ -441,11 +184,6 @@ async def handle_video(message: types.Message):
 async def handle_voice(message: types.Message):
     await message.answer("❗ Ovozli xabar qabul qilinmaydi. Faqat MasterCard PDF yuboring.")
 
-# 🚫 Oddiy text yozuv
-@dp.message(F.text)
-async def handle_text(message: types.Message):
-    await message.answer("❗ Oddiy matn qabul qilinmaydi. Faqat MasterCard PDF yuboring.")
-
 
 # 📥 Faqat PDF fayllarni qabul qilish
 @dp.message(F.document)
@@ -454,15 +192,15 @@ async def handle_doc(message: types.Message):
         await message.answer("❗ Bu fayl PDF emas. Faqat MasterCard PDF yuboring.")
         return
 
-    tmpdir = tempfile.gettempdir()
-    uniq = uuid.uuid4().hex
-    pdf_path = os.path.join(tmpdir, f"{uniq}.pdf")
-    excel_path = os.path.join(tmpdir, f"{uniq}.xlsx")
+    os.makedirs("downloads", exist_ok=True)
+    filename = message.document.file_name or f"{message.document.file_unique_id}.pdf"
+    pdf_path = os.path.join("downloads", f"{message.document.file_unique_id}_{filename}")
 
     try:
         # 📥 Faylni olish
         file = await bot.get_file(message.document.file_id)
         await bot.download_file(file.file_path, pdf_path)
+
         await message.answer("✅ PDF qabul qilindi. O‘qilmoqda...")
 
         # 📖 PDF dan text olish
@@ -481,26 +219,26 @@ async def handle_doc(message: types.Message):
             return
 
         # 📊 Excel yaratish
-        create_excel(parsed, excel_path)
+        out_xlsx = os.path.join("downloads", f"{message.document.file_unique_id}.xlsx")
+        create_excel(parsed, out_xlsx)
 
         # 📤 Excelni yuborish
-        await message.reply_document(FSInputFile(excel_path))
+        await message.reply_document(FSInputFile(out_xlsx))
 
     except Exception as e:
         await message.answer(f"❗ Xatolik: {e}")
+
     finally:
-        for f in (pdf_path, excel_path):
-            try:
-                if os.path.exists(f): os.remove(f)
-            except Exception:
-                pass
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        if 'out_xlsx' in locals() and os.path.exists(out_xlsx):
+            os.remove(out_xlsx)
 
 
-# ======================= Main =======================
 async def main():
-    logger.info("Bot ishga tushmoqda...")
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
